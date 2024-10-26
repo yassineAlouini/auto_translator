@@ -33,7 +33,8 @@ SUPPORTED_LANGUAGES = {
     "russian": "ru",
     "japanese": "ja",
     "chinese": "zh",
-    "korean": "ko"
+    "korean": "ko",
+    "arabic": "ar"
 }
 
 class SRTTranslatorBot(commands.Bot):
@@ -105,7 +106,7 @@ async def translate_srt_content(content: str, target_lang: str) -> str:
         logger.info(f"Found {len(srt_blocks)} subtitle blocks to translate")
         
         translated_blocks = []
-        batch_size = 10
+        batch_size = 20
         
         for i in range(0, len(srt_blocks), batch_size):
             batch = srt_blocks[i:i+batch_size]
@@ -155,7 +156,7 @@ async def translate(interaction: discord.Interaction):
         )
 
     try:
-        file_message = await bot.wait_for('message', timeout=60.0, check=check)
+        file_message = await bot.wait_for('message', timeout=120.0, check=check)
         attachment = file_message.attachments[0]
         
         if not attachment.filename.endswith('.srt'):
