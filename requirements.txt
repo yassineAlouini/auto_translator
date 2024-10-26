@@ -1,0 +1,3 @@
+anthropic
+python_dotenv
+discord

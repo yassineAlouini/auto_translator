@@ -1,0 +1,7 @@
+1
+00:00:28,240 --> 00:00:31,240
+This is a sample text to translate
+
+2
+00:00:44,399 --> 00:00:49,559
+Here is another sample to translate!
