@@ -7,8 +7,9 @@ from typing import List, Dict
 from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
-
-
+import time
+import asyncio
+from aiohttp import ClientError
 load_dotenv()
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -77,26 +78,40 @@ def write_srt_file(file_path: str, content: str):
         logger.error(f"Error writing SRT file {file_path}: {str(e)}")
         raise
 
-def translate_batch(texts: List[str], target_lang: str) -> List[str]:
+async def translate_batch(texts: List[str], target_lang: str, max_retries: int = 3) -> List[str]:
     logger.info(f"Translating batch of {len(texts)} text blocks to {target_lang}")
-    try:
-        prompt = f"Translate the following subtitle texts to {target_lang}. Maintain the original formatting and line breaks. Separate each translation with '---'.\n\n"
-        prompt += "\n---\n".join(texts)
-        
-        message = anthropic_client.messages.create(
-            model="claude-3-5-sonnet-20240620",
-            max_tokens=8_000,
-            system="You are a professional translator.",
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        logger.info("Successfully received translation response")
-        translations = message.content[0].text.split('---')
-        return [t.strip() for t in translations]
-    except Exception as e:
-        logger.error(f"Error translating batch: {str(e)}")
-        raise
+    
+    for attempt in range(max_retries):
+        try:
+            # Add rate limiting delay
+            await asyncio.sleep(1.2)
+            
+            prompt = f"Translate the following subtitle texts to {target_lang}. Maintain the original formatting and line breaks. Separate each translation with '---'.\n\n"
+            prompt += "\n---\n".join(texts)
+            
+            # Run the synchronous Anthropic client in a thread pool
+            message = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: anthropic_client.messages.create(
+                    model="claude-3-5-sonnet-20240620",
+                    max_tokens=8000,
+                    system="You are a professional translator.",
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
+            )
+            
+            logger.info("Successfully received translation response")
+            translations = message.content[0].text.split('---')
+            return [t.strip() for t in translations]
+            
+        except Exception as e:
+            logger.error(f"Error on attempt {attempt + 1}/{max_retries}: {str(e)}")
+            if attempt == max_retries - 1:  # Last attempt
+                raise
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            continue
 
 async def translate_srt_content(content: str, target_lang: str) -> str:
     logger.info(f"Starting translation to {target_lang}")
@@ -106,7 +121,7 @@ async def translate_srt_content(content: str, target_lang: str) -> str:
         logger.info(f"Found {len(srt_blocks)} subtitle blocks to translate")
         
         translated_blocks = []
-        batch_size = 20
+        batch_size = 200
         
         for i in range(0, len(srt_blocks), batch_size):
             batch = srt_blocks[i:i+batch_size]
@@ -120,16 +135,22 @@ async def translate_srt_content(content: str, target_lang: str) -> str:
                 else:
                     texts_to_translate.append('')
             
-            translated_texts = translate_batch(texts_to_translate, target_lang)
+            try:
+                # Add await here
+                translated_texts = await translate_batch(texts_to_translate, target_lang)
+                
+                for j, translated_text in enumerate(translated_texts):
+                    block = batch[j]
+                    lines = block.split('\n')
+                    if len(lines) >= 3:
+                        translated_block = f"{lines[0]}\n{lines[1]}\n{translated_text}"
+                        translated_blocks.append(translated_block)
+                    else:
+                        logger.warning(f"Skipping block {i+j+1} due to insufficient lines")
             
-            for j, translated_text in enumerate(translated_texts):
-                block = batch[j]
-                lines = block.split('\n')
-                if len(lines) >= 3:
-                    translated_block = f"{lines[0]}\n{lines[1]}\n{translated_text}"
-                    translated_blocks.append(translated_block)
-                else:
-                    logger.warning(f"Skipping block {i+j+1} due to insufficient lines")
+            except Exception as e:
+                logger.error(f"Error translating batch {i//batch_size + 1}: {str(e)}")
+                raise
         
         return '\n\n'.join(translated_blocks)
     except Exception as e:
